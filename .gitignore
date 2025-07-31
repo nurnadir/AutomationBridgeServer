@@ -1,0 +1,13 @@
+target/
+*.jar
+*.jks
+*.p12
+security.env
+logs/
+dependency-reduced-pom.xml
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath

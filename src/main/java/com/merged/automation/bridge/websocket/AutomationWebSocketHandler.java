@@ -5,6 +5,7 @@ import com.merged.automation.bridge.model.ClientInfo;
 import com.merged.automation.bridge.model.RpcMessage;
 import com.merged.automation.bridge.service.ClientManager;
 import com.merged.automation.bridge.service.RpcProcessor;
+import com.merged.automation.bridge.security.SecurityManager;
 import org.eclipse.jetty.websocket.api.Session;
 import org.eclipse.jetty.websocket.api.WebSocketAdapter;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
@@ -24,12 +25,15 @@ public class AutomationWebSocketHandler extends WebSocketAdapter {
     private final ObjectMapper objectMapper;
     private final ClientManager clientManager;
     private final RpcProcessor rpcProcessor;
+    private final SecurityManager securityManager;
     private String clientId;
     
-    public AutomationWebSocketHandler(ObjectMapper objectMapper, ClientManager clientManager, RpcProcessor rpcProcessor) {
+    public AutomationWebSocketHandler(ObjectMapper objectMapper, ClientManager clientManager, 
+                                    RpcProcessor rpcProcessor, SecurityManager securityManager) {
         this.objectMapper = objectMapper;
         this.clientManager = clientManager;
         this.rpcProcessor = rpcProcessor;
+        this.securityManager = securityManager;
     }
     
     @Override
@@ -38,6 +42,18 @@ public class AutomationWebSocketHandler extends WebSocketAdapter {
         this.clientId = UUID.randomUUID().toString();
         
         logger.info("WebSocket connection established: {}", clientId);
+        
+        // Check connection security
+        SecurityManager.SecurityCheckResult securityCheck = securityManager.checkConnectionSecurity(session);
+        if (!securityCheck.isAllowed()) {
+            logger.warn("Connection blocked for security reasons: {}", securityCheck.getReason());
+            try {
+                session.close(1008, "Connection blocked: " + securityCheck.getReason());
+            } catch (Exception e) {
+                logger.error("Error closing blocked connection", e);
+            }
+            return;
+        }
         
         // Register client with temporary info - will be updated on authentication
         ClientInfo clientInfo = new ClientInfo(clientId, ClientInfo.ClientType.AUTOMATION_SERVICE, "Unknown");
@@ -51,6 +67,27 @@ public class AutomationWebSocketHandler extends WebSocketAdapter {
             
             // Parse RPC message
             RpcMessage rpcMessage = objectMapper.readValue(message, RpcMessage.class);
+            
+            // Security check
+            SecurityManager.SecurityCheckResult securityCheck = 
+                securityManager.checkMessageSecurity(clientId, rpcMessage, message, getSession());
+            
+            if (!securityCheck.isAllowed()) {
+                logger.warn("Message blocked for security reasons: {}", securityCheck.getReason());
+                
+                // Send security error response
+                RpcMessage errorResponse = new RpcMessage(
+                    rpcMessage.getId() != null ? rpcMessage.getId() : UUID.randomUUID().toString(), 
+                    RpcMessage.MessageType.ERROR
+                );
+                errorResponse.setError(new RpcMessage.RpcError(
+                    RpcMessage.ErrorCodes.UNAUTHORIZED, 
+                    securityCheck.getReason()
+                ));
+                
+                sendMessage(errorResponse);
+                return;
+            }
             
             // Update client activity
             clientManager.updateClientActivity(clientId);
@@ -87,6 +124,7 @@ public class AutomationWebSocketHandler extends WebSocketAdapter {
         
         if (clientId != null) {
             clientManager.unregisterClient(clientId);
+            securityManager.disconnectClient(clientId);
         }
     }
     

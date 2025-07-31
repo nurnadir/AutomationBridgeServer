@@ -110,5 +110,8 @@ public class RpcMessage {
         public static final int CLIENT_NOT_FOUND = -32001;
         public static final int AUTOMATION_ERROR = -32002;
         public static final int VNC_ERROR = -32003;
+        public static final int UNAUTHORIZED = -32004;
+        public static final int RATE_LIMIT_EXCEEDED = -32005;
+        public static final int IP_BLOCKED = -32006;
     }
 }

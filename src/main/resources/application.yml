@@ -1,0 +1,20 @@
+bridge:
+  security:
+    jwt:
+      secret: ${BRIDGE_SECURITY_JWT_SECRET:}
+      expiration: ${BRIDGE_SECURITY_JWT_EXPIRATION:3600000}
+    allowed-ips: ${BRIDGE_SECURITY_ALLOWED_IPS:127.0.0.1,::1}
+    require-auth: ${BRIDGE_SECURITY_REQUIRE_AUTH:true}
+    rate-limit:
+      requests: ${BRIDGE_SECURITY_RATE_LIMIT_REQUESTS:100}
+      window: ${BRIDGE_SECURITY_RATE_LIMIT_WINDOW:60}
+
+logging:
+  level:
+    com.merged.automation.bridge: INFO
+    com.merged.automation.bridge.security: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/automation-bridge-server.log

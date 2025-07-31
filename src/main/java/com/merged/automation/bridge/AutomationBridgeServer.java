@@ -1,18 +1,27 @@
 package com.merged.automation.bridge;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.merged.automation.bridge.security.SecurityFactory;
 import com.merged.automation.bridge.service.ClientManager;
 import com.merged.automation.bridge.service.RpcProcessor;
 import com.merged.automation.bridge.websocket.AutomationWebSocketHandler;
 import org.apache.commons.cli.*;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.SslConnectionFactory;
+import org.eclipse.jetty.server.HttpConfiguration;
+import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.server.SecureRequestCustomizer;
 import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.websocket.server.config.JettyWebSocketServletContainerInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main server class for Automation Bridge Server
@@ -27,19 +36,36 @@ public class AutomationBridgeServer {
     private final ObjectMapper objectMapper;
     private final ClientManager clientManager;
     private final RpcProcessor rpcProcessor;
+    private final SecurityFactory.SecurityComponents securityComponents;
     private Server server;
     private int port;
     private String host;
+    private boolean sslEnabled;
+    private String keystorePath;
+    private String keystorePassword;
+    private ScheduledExecutorService securityCleanupExecutor;
     
-    public AutomationBridgeServer(String host, int port) {
+    public AutomationBridgeServer(String host, int port, boolean sslEnabled, String keystorePath, String keystorePassword) {
         this.host = host;
         this.port = port;
+        this.sslEnabled = sslEnabled;
+        this.keystorePath = keystorePath;
+        this.keystorePassword = keystorePassword;
+        
         this.objectMapper = new ObjectMapper();
         this.clientManager = new ClientManager();
         this.rpcProcessor = new RpcProcessor(clientManager);
+        this.securityComponents = SecurityFactory.createSecurityComponents();
+        
+        // Security cleanup scheduler
+        this.securityCleanupExecutor = Executors.newScheduledThreadPool(1);
         
         // Add shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
+    }
+    
+    public AutomationBridgeServer(String host, int port) {
+        this(host, port, false, null, null);
     }
     
     /**
@@ -50,7 +76,40 @@ public class AutomationBridgeServer {
         
         // Configure Jetty server
         server = new Server();
-        ServerConnector connector = new ServerConnector(server);
+        
+        ServerConnector connector;
+        if (sslEnabled && keystorePath != null) {
+            // SSL/TLS Configuration
+            SslContextFactory.Server sslContextFactory = new SslContextFactory.Server();
+            sslContextFactory.setKeyStorePath(keystorePath);
+            sslContextFactory.setKeyStorePassword(keystorePassword);
+            sslContextFactory.setKeyManagerPassword(keystorePassword);
+            
+            // Security protocols
+            sslContextFactory.setIncludeProtocols("TLSv1.2", "TLSv1.3");
+            sslContextFactory.setExcludeProtocols("SSLv2", "SSLv3", "TLSv1", "TLSv1.1");
+            
+            // Security ciphers
+            sslContextFactory.setIncludeCipherSuites(
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256"
+            );
+            
+            HttpConfiguration httpConfig = new HttpConfiguration();
+            httpConfig.addCustomizer(new SecureRequestCustomizer());
+            
+            connector = new ServerConnector(server,
+                new SslConnectionFactory(sslContextFactory, "http/1.1"),
+                new HttpConnectionFactory(httpConfig));
+                
+            logger.info("SSL/TLS enabled with keystore: {}", keystorePath);
+        } else {
+            connector = new ServerConnector(server);
+            logger.warn("SSL/TLS not enabled - using unsecured connection");
+        }
+        
         connector.setHost(host);
         connector.setPort(port);
         server.addConnector(connector);
@@ -68,7 +127,7 @@ public class AutomationBridgeServer {
             
             // Add WebSocket endpoint
             wsContainer.addMapping("/ws", (upgradeRequest, upgradeResponse) -> {
-                return new AutomationWebSocketHandler(objectMapper, clientManager, rpcProcessor);
+                return new AutomationWebSocketHandler(objectMapper, clientManager, rpcProcessor, securityComponents.securityManager);
             });
         });
         
@@ -85,10 +144,25 @@ public class AutomationBridgeServer {
             }
         });
         
+        // Start security cleanup scheduler
+        securityCleanupExecutor.scheduleAtFixedRate(
+            securityComponents.securityManager::cleanupExpiredSessions, 
+            5, 5, TimeUnit.MINUTES
+        );
+        
         // Start server
         server.start();
         logger.info("Automation Bridge Server started successfully on {}:{}", host, port);
-        logger.info("WebSocket endpoint: ws://{}:{}/ws", host, port);
+        
+        String protocol = sslEnabled ? "wss" : "ws";
+        logger.info("WebSocket endpoint: {}://{}:{}/ws", protocol, host, port);
+        
+        // Print security info
+        logger.info("Security features enabled:");
+        logger.info("- JWT Authentication: {}", securityComponents.securityConfig.isRequireAuth());
+        logger.info("- IP Whitelisting: {}", !securityComponents.securityConfig.getAllowedIps().isEmpty());
+        logger.info("- Rate Limiting: {} req/{} sec", securityComponents.securityConfig.getRateLimitRequests(), securityComponents.securityConfig.getRateLimitWindow());
+        logger.info("- TLS/SSL: {}", sslEnabled);
         
         // Print client connection info
         logger.info("Waiting for client connections...");
@@ -103,6 +177,11 @@ public class AutomationBridgeServer {
         if (server != null) {
             logger.info("Stopping Automation Bridge Server...");
             try {
+                // Stop security cleanup scheduler
+                if (securityCleanupExecutor != null) {
+                    securityCleanupExecutor.shutdown();
+                }
+                
                 server.stop();
                 logger.info("Server stopped successfully");
             } catch (Exception e) {
@@ -151,9 +230,12 @@ public class AutomationBridgeServer {
             
             String host = cmd.getOptionValue("host", DEFAULT_HOST);
             int port = Integer.parseInt(cmd.getOptionValue("port", String.valueOf(DEFAULT_PORT)));
+            boolean sslEnabled = cmd.hasOption("ssl");
+            String keystorePath = cmd.getOptionValue("keystore");
+            String keystorePassword = cmd.getOptionValue("keystore-password");
             
             // Create and start server
-            AutomationBridgeServer server = new AutomationBridgeServer(host, port);
+            AutomationBridgeServer server = new AutomationBridgeServer(host, port, sslEnabled, keystorePath, keystorePassword);
             server.start();
             
             // Wait for server to finish
@@ -190,6 +272,25 @@ public class AutomationBridgeServer {
                 .build());
         
         options.addOption(Option.builder()
+                .longOpt("ssl")
+                .desc("Enable SSL/TLS (requires keystore)")
+                .build());
+        
+        options.addOption(Option.builder()
+                .longOpt("keystore")
+                .hasArg()
+                .argName("PATH")
+                .desc("Path to SSL keystore file")
+                .build());
+        
+        options.addOption(Option.builder()
+                .longOpt("keystore-password")
+                .hasArg()
+                .argName("PASSWORD")
+                .desc("Password for SSL keystore")
+                .build());
+        
+        options.addOption(Option.builder()
                 .longOpt("help")
                 .desc("Show this help message")
                 .build());
@@ -208,7 +309,13 @@ public class AutomationBridgeServer {
                 "\nExamples:\n" +
                 "  java -jar bridge-server.jar\n" +
                 "  java -jar bridge-server.jar --host 127.0.0.1 --port 9090\n" +
-                "  java -jar bridge-server.jar --help\n", 
+                "  java -jar bridge-server.jar --ssl --keystore server.jks --keystore-password mypass\n" +
+                "  java -jar bridge-server.jar --help\n" +
+                "\nSecurity Configuration (Environment Variables):\n" +
+                "  BRIDGE_SECURITY_JWT_SECRET=<jwt-secret>\n" +
+                "  BRIDGE_SECURITY_ALLOWED_IPS=192.168.1.0/24,10.0.0.0/8\n" +
+                "  BRIDGE_SECURITY_REQUIRE_AUTH=true\n" +
+                "  BRIDGE_SECURITY_RATE_LIMIT_REQUESTS=100\n", 
                 true);
     }
 }
