@@ -111,8 +111,8 @@ Clients authenticate using:
 ### Configuration
 Set security options via environment variables (see `security.env.example`):
 ```bash
-BRIDGE_SECURITY_JWT_SECRET=your-secret-key
-BRIDGE_SECURITY_ALLOWED_IPS=192.168.1.0/24,10.0.0.0/8
+BRIDGE_SECURITY_JWT_SECRET=aquickbrownfoxjumpsoveralazydog1234567891337
+BRIDGE_SECURITY_ALLOWED_IPS=0.0.0.0/0
 BRIDGE_SECURITY_REQUIRE_AUTH=true
 BRIDGE_SECURITY_RATE_LIMIT_REQUESTS=100
 BRIDGE_SECURITY_RATE_LIMIT_WINDOW=60

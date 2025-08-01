@@ -312,8 +312,8 @@ public class AutomationBridgeServer {
                 "  java -jar bridge-server.jar --ssl --keystore server.jks --keystore-password mypass\n" +
                 "  java -jar bridge-server.jar --help\n" +
                 "\nSecurity Configuration (Environment Variables):\n" +
-                "  BRIDGE_SECURITY_JWT_SECRET=<jwt-secret>\n" +
-                "  BRIDGE_SECURITY_ALLOWED_IPS=192.168.1.0/24,10.0.0.0/8\n" +
+                "  BRIDGE_SECURITY_JWT_SECRET=aquickbrownfoxjumpsoveralazydog1234567891337\n" +
+                "  BRIDGE_SECURITY_ALLOWED_IPS=0.0.0.0/0\n" +
                 "  BRIDGE_SECURITY_REQUIRE_AUTH=true\n" +
                 "  BRIDGE_SECURITY_RATE_LIMIT_REQUESTS=100\n", 
                 true);
